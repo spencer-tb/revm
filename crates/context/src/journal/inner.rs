@@ -413,6 +413,7 @@ impl<ENTRY: JournalEntryTr> JournalInner<ENTRY> {
         // this entry will revert set nonce.
         last_journal.push(ENTRY::account_created(target_address, is_created_globally));
         target_acc.info.code = None;
+        target_acc.info.code_hash = KECCAK_EMPTY;
         // EIP-161: State trie clearing (invariant-preserving alternative)
         if spec_id.is_enabled_in(SPURIOUS_DRAGON) {
             // nonce is going to be reset to zero in AccountCreated journal entry.

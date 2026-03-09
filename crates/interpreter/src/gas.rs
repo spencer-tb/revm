@@ -33,7 +33,7 @@ impl Gas {
     pub const fn new(limit: u64) -> Self {
         Self {
             limit,
-            tracker: GasTracker::new(limit, 0),
+            tracker: GasTracker::new(limit, limit, 0),
             memory: MemoryGas::new(),
         }
     }
@@ -64,7 +64,7 @@ impl Gas {
     pub const fn new_with_regular_gas_and_reservoir(limit: u64, reservoir: u64) -> Self {
         Self {
             limit,
-            tracker: GasTracker::new(limit, reservoir),
+            tracker: GasTracker::new(limit, limit, reservoir),
             memory: MemoryGas::new(),
         }
     }
@@ -74,7 +74,7 @@ impl Gas {
     pub const fn new_spent(limit: u64) -> Self {
         Self {
             limit,
-            tracker: GasTracker::new(0, 0),
+            tracker: GasTracker::new(0, 0, 0),
             memory: MemoryGas::new(),
         }
     }

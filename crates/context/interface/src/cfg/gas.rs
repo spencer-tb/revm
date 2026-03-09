@@ -9,6 +9,8 @@ use primitives::hardfork::SpecId;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GasTracker {
+    /// Gas Limit,
+    gas_limit: u64,
     /// Regular gas remaining (`gas_left`). Reservoir is tracked separately.
     remaining: u64,
     /// State gas reservoir (gas exceeding TX_MAX_GAS_LIMIT). Starts as `execution_gas - min(execution_gas, regular_gas_budget)`.
@@ -23,13 +25,20 @@ pub struct GasTracker {
 impl GasTracker {
     /// Creates a new `GasTracker` with the given remaining gas and reservoir.
     #[inline]
-    pub const fn new(remaining: u64, reservoir: u64) -> Self {
+    pub const fn new(gas_limit: u64, remaining: u64, reservoir: u64) -> Self {
         Self {
+            gas_limit,
             remaining,
             reservoir,
             state_gas_spent: 0,
             refunded: 0,
         }
+    }
+
+    /// Creates a new `GasTracker` with the given used gas and reservoir.
+    #[inline]
+    pub const fn new_used_gas(gas_limit: u64, used_gas: u64, reservoir: u64) -> Self {
+        Self::new(gas_limit, gas_limit - used_gas, reservoir)
     }
 
     /// Returns the remaining gas.
@@ -247,10 +256,11 @@ pub const CALL_STIPEND: u64 = 2300;
 pub struct InitialAndFloorGas {
     /// Initial gas for transaction.
     pub initial_total_gas: u64,
-    /// TOOD(state_gas): fix this comment to include EIP-8037 covered cases.
     /// State gas component of initial_gas (subset of initial_total_gas).
-    /// For CREATE transactions, this includes `new_account_state_gas` and `create_state_gas`.
-    /// For CALL transactions, this is 0 as state gas is unpredictable at validation time.
+    /// Under EIP-8037, this includes:
+    /// - EIP-7702 auth list state gas (per-auth account creation + metadata costs)
+    /// - For CREATE transactions: `create_state_gas` (account creation + contract metadata)
+    /// - For CALL transactions: 0 (state gas is unpredictable at validation time)
     pub initial_state_gas: u64,
     /// If transaction is a Call and Prague is enabled
     /// floor_gas is at least amount of gas that is going to be spent.

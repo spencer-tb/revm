@@ -40,7 +40,17 @@ impl PrecompileOutput {
     /// Returns new precompile output with the given gas limit, gas used, and output bytes.
     pub fn new(gas_limit: u64, gas_used: u64, bytes: Bytes) -> Self {
         Self {
-            gas: GasTracker::new(gas_limit - gas_used, 0),
+            gas: GasTracker::new_used_gas(gas_limit, gas_used, 0),
+            bytes,
+            reverted: false,
+        }
+    }
+
+    /// Returns new precompile output with the given gas tracker and output bytes.
+    #[inline]
+    pub fn new_with_gas_tracker(gas: GasTracker, bytes: Bytes) -> Self {
+        Self {
+            gas,
             bytes,
             reverted: false,
         }

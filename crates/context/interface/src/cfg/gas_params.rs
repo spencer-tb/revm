@@ -317,7 +317,6 @@ impl GasParams {
 
         // EIP-8037: State creation gas cost increase
         if spec.is_enabled_in(SpecId::AMSTERDAM) {
-            // TODO(state_gas): check if all new GasId values are correct and set.
             // Hardcoded cost_per_state_byte for 100M block gas limit
             const CPSB: u64 = 1174;
 
@@ -818,10 +817,10 @@ impl GasParams {
     /// Initial gas that is deducted for transaction to be included.
     /// Initial gas contains initial stipend gas, gas for access list and input data.
     ///
-    /// TODO(state_gas): fix this comment to include all EIP-8037 covered cases.
-    /// For CREATE transactions, also includes predictable state gas costs:
-    /// - `new_account_state_gas`: Creating the contract account
-    /// - `create_state_gas`: Contract metadata creation
+    /// Under EIP-8037, state gas is tracked separately in `initial_state_gas` and
+    /// added to `initial_total_gas` at the end. The state gas components are:
+    /// - EIP-7702 auth list state gas (per-auth account creation + metadata costs)
+    /// - For CREATE transactions: `create_state_gas` (account creation + contract metadata)
     ///
     /// Note: `code_deposit_state_gas` is not included since deployed code size is unknown at validation time.
     ///
@@ -860,7 +859,7 @@ impl GasParams {
             + auth_regular_cost;
 
         // EIP-8037: Track auth list state gas separately for reservoir handling.
-        // TODO(state_gas): why is this not included in initial_total_gas?
+        // State gas is added to initial_total_gas at the end of this function.
         gas.initial_state_gas += auth_state_gas;
 
         if is_create {

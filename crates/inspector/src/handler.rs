@@ -69,10 +69,12 @@ where
                 let state_refund_per_auth = core::cmp::min(per_auth_refund, per_auth_state_gas);
                 let num_refunded = eip7702_refund / per_auth_refund;
                 let state_refund = num_refunded * state_refund_per_auth;
-                init_and_floor_gas.initial_state_gas =
-                    init_and_floor_gas.initial_state_gas.saturating_sub(state_refund);
-                init_and_floor_gas.initial_total_gas =
-                    init_and_floor_gas.initial_total_gas.saturating_sub(state_refund);
+                init_and_floor_gas.initial_state_gas = init_and_floor_gas
+                    .initial_state_gas
+                    .saturating_sub(state_refund);
+                init_and_floor_gas.initial_total_gas = init_and_floor_gas
+                    .initial_total_gas
+                    .saturating_sub(state_refund);
                 state_refund
             } else {
                 0

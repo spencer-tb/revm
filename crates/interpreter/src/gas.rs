@@ -19,15 +19,8 @@ pub use context_interface::cfg::gas::*;
 pub struct Gas {
     /// The initial gas limit. This is constant throughout execution.
     limit: u64,
-    /// Regular gas remaining (`gas_left`). Reservoir is tracked separately.
-    remaining: u64,
-    /// State gas reservoir (gas exceeding TX_MAX_GAS_LIMIT). Starts as `execution_gas - min(execution_gas, regular_gas_budget)`.
-    /// When 0, all remaining gas is regular gas with hard cap at `TX_MAX_GAS_LIMIT`.
-    reservoir: u64,
-    /// Total state gas spent so far.
-    state_gas_spent: u64,
-    /// Refunded gas. This is used only at the end of execution.
-    refunded: i64,
+    /// Tracker for gas during execution.
+    tracker: GasTracker,
     /// Memoisation of values for memory expansion cost.
     memory: MemoryGas,
 }
@@ -40,12 +33,21 @@ impl Gas {
     pub const fn new(limit: u64) -> Self {
         Self {
             limit,
-            remaining: limit,
-            reservoir: 0,
-            state_gas_spent: 0,
-            refunded: 0,
+            tracker: GasTracker::new(limit, 0),
             memory: MemoryGas::new(),
         }
+    }
+
+    /// Returns the tracker for gas during execution.
+    #[inline]
+    pub const fn tracker(&self) -> &GasTracker {
+        &self.tracker
+    }
+
+    /// Returns the mutable tracker for gas during execution.
+    #[inline]
+    pub const fn tracker_mut(&mut self) -> &mut GasTracker {
+        &mut self.tracker
     }
 
     /// Creates a new `Gas` struct with a regular gas budget and reservoir (EIP-8037 reservoir model).
@@ -62,10 +64,7 @@ impl Gas {
     pub const fn new_with_regular_gas_and_reservoir(limit: u64, reservoir: u64) -> Self {
         Self {
             limit,
-            remaining: limit,
-            reservoir,
-            state_gas_spent: 0,
-            refunded: 0,
+            tracker: GasTracker::new(limit, reservoir),
             memory: MemoryGas::new(),
         }
     }
@@ -75,10 +74,7 @@ impl Gas {
     pub const fn new_spent(limit: u64) -> Self {
         Self {
             limit,
-            remaining: 0,
-            reservoir: 0,
-            state_gas_spent: 0,
-            refunded: 0,
+            tracker: GasTracker::new(0, 0),
             memory: MemoryGas::new(),
         }
     }
@@ -104,13 +100,13 @@ impl Gas {
     /// Returns the total amount of gas that was refunded.
     #[inline]
     pub const fn refunded(&self) -> i64 {
-        self.refunded
+        self.tracker.refunded()
     }
 
     /// Returns the total amount of gas spent.
     #[inline]
     pub const fn spent(&self) -> u64 {
-        self.limit - self.remaining
+        self.limit - self.tracker.remaining()
     }
 
     /// Returns the final amount of gas used by subtracting the refund from spent gas.
@@ -122,44 +118,43 @@ impl Gas {
     /// Returns the total amount of gas spent, minus the refunded gas.
     #[inline]
     pub const fn spent_sub_refunded(&self) -> u64 {
-        self.spent().saturating_sub(self.refunded as u64)
+        self.spent().saturating_sub(self.tracker.refunded() as u64)
     }
 
     /// Returns the amount of gas remaining.
     #[inline]
     pub const fn remaining(&self) -> u64 {
-        self.remaining
+        self.tracker.remaining()
     }
 
     /// Returns the state gas reservoir.
     #[inline]
     pub const fn reservoir(&self) -> u64 {
-        self.reservoir
+        self.tracker.reservoir()
     }
 
     /// Sets the state gas reservoir (used when propagating from child frame).
     #[inline]
     pub fn set_reservoir(&mut self, val: u64) {
-        self.reservoir = val;
+        self.tracker.set_reservoir(val);
     }
 
     /// Returns total state gas spent so far.
     #[inline]
     pub const fn state_gas_spent(&self) -> u64 {
-        self.state_gas_spent
+        self.tracker.state_gas_spent()
     }
 
     /// Sets the total state gas spent (used when propagating from child frame).
     #[inline]
     pub fn set_state_gas_spent(&mut self, val: u64) {
-        self.state_gas_spent = val;
+        self.tracker.set_state_gas_spent(val);
     }
 
     /// Erases a gas cost from remaining (returns gas from child frame).
-    /// Does NOT affect `regular_gas_remaining` — regular gas flows separately.
     #[inline]
     pub fn erase_cost(&mut self, returned: u64) {
-        self.remaining += returned;
+        self.tracker.erase_cost(returned);
     }
 
     /// Spends all remaining gas excluding the reservoir.
@@ -170,7 +165,7 @@ impl Gas {
     /// Note that this does not affect the reservoir.
     #[inline]
     pub fn spend_all(&mut self) {
-        self.remaining = 0;
+        self.tracker.spend_all();
     }
 
     /// Records a refund value.
@@ -179,7 +174,7 @@ impl Gas {
     /// at the end of transact.
     #[inline]
     pub fn record_refund(&mut self, refund: i64) {
-        self.refunded += refund;
+        self.tracker.record_refund(refund);
     }
 
     /// Set a refund value for final refund.
@@ -190,25 +185,26 @@ impl Gas {
     #[inline]
     pub fn set_final_refund(&mut self, is_london: bool) {
         let max_refund_quotient = if is_london { 5 } else { 2 };
-        self.refunded = (self.refunded() as u64).min(self.spent() / max_refund_quotient) as i64;
+        self.tracker
+            .set_refunded((self.refunded() as u64).min(self.spent() / max_refund_quotient) as i64);
     }
 
     /// Set a refund value. This overrides the current refund value.
     #[inline]
     pub fn set_refund(&mut self, refund: i64) {
-        self.refunded = refund;
+        self.tracker.set_refunded(refund);
     }
 
     /// Set a remaining value. This overrides the current remaining value.
     #[inline]
     pub fn set_remaining(&mut self, remaining: u64) {
-        self.remaining = remaining;
+        self.tracker.set_remaining(remaining);
     }
 
     /// Set a spent value. This overrides the current spent value.
     #[inline]
     pub fn set_spent(&mut self, spent: u64) {
-        self.remaining = self.limit.saturating_sub(spent);
+        self.tracker.set_remaining(self.limit.saturating_sub(spent));
     }
 
     /// Records a regular gas cost (EIP-8037 reservoir model).
@@ -233,8 +229,9 @@ impl Gas {
     #[inline(always)]
     #[must_use = "In case of not enough gas, the interpreter should halt with an out-of-gas error"]
     pub fn record_cost_unsafe(&mut self, cost: u64) -> bool {
-        let oog = self.remaining < cost;
-        self.remaining = self.remaining.wrapping_sub(cost);
+        let remaining = self.tracker.remaining();
+        let oog = remaining < cost;
+        self.tracker.set_remaining(remaining.wrapping_sub(cost));
         oog
     }
 
@@ -247,21 +244,7 @@ impl Gas {
     /// Returns `false` if total remaining gas is insufficient.
     #[inline]
     pub fn record_state_cost(&mut self, cost: u64) -> bool {
-        // bump state gas spent
-        self.state_gas_spent = self.state_gas_spent.saturating_add(cost);
-
-        if self.reservoir >= cost {
-            self.reservoir -= cost;
-            return true;
-        }
-
-        let mut spill = cost;
-        if self.reservoir != 0 {
-            spill -= self.reservoir;
-            self.reservoir = 0;
-        }
-
-        self.record_regular_cost(spill)
+        self.tracker.record_state_cost(cost)
     }
 
     /// Deducts from `remaining` only (used for child frame gas forwarding).
@@ -269,11 +252,7 @@ impl Gas {
     /// Used for forwarding gas to child frames.
     #[inline]
     pub fn record_regular_cost(&mut self, cost: u64) -> bool {
-        if let Some(new_remaining) = self.remaining.checked_sub(cost) {
-            self.remaining = new_remaining;
-            return true;
-        }
-        false
+        self.tracker.record_regular_cost(cost)
     }
 }
 

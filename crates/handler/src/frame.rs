@@ -203,16 +203,17 @@ impl EthFrame<EthInterpreter> {
         if let Some(mut result) = precompiles.run(ctx, &inputs).map_err(ERROR::from_string)? {
             let mut logs = Vec::new();
             if result.result.is_ok() {
+                // Preserve the reservoir on the result gas so it can be reimbursed.
+                // Precompiles don't use reservoir gas, but the first frame carries it.
+                result.gas.set_reservoir(reservoir_remaining_gas);
                 ctx.journal_mut().checkpoint_commit();
             } else {
                 // clone logs that precompile created, only possible with custom precompiles.
                 // checkpoint.log_i will be always correct.
+                handler_reservoir_refill(reservoir_remaining_gas, result.gas.state_gas_spent());
                 logs = ctx.journal_mut().logs()[checkpoint.log_i..].to_vec();
                 ctx.journal_mut().checkpoint_revert(checkpoint);
             }
-            // Preserve the reservoir on the result gas so it can be reimbursed.
-            // Precompiles don't use reservoir gas, but the first frame carries it.
-            result.gas.set_reservoir(reservoir_remaining_gas);
             return Ok(ItemOrResult::Result(FrameResult::Call(CallOutcome {
                 result,
                 memory_offset: inputs.return_memory_offset.clone(),

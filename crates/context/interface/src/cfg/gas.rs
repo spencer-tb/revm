@@ -3,6 +3,140 @@
 use crate::{cfg::GasParams, transaction::AccessListItemTr as _, Transaction, TransactionType};
 use primitives::hardfork::SpecId;
 
+/// Tracker for gas during execution.
+///
+/// This is used to track the gas during execution.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct GasTracker {
+    /// Regular gas remaining (`gas_left`). Reservoir is tracked separately.
+    remaining: u64,
+    /// State gas reservoir (gas exceeding TX_MAX_GAS_LIMIT). Starts as `execution_gas - min(execution_gas, regular_gas_budget)`.
+    /// When 0, all remaining gas is regular gas with hard cap at `TX_MAX_GAS_LIMIT`.
+    reservoir: u64,
+    /// Total state gas spent so far.
+    state_gas_spent: u64,
+    /// Refunded gas. This is used only at the end of execution.
+    refunded: i64,
+}
+
+impl GasTracker {
+    /// Creates a new `GasTracker` with the given remaining gas and reservoir.
+    #[inline]
+    pub const fn new(remaining: u64, reservoir: u64) -> Self {
+        Self {
+            remaining,
+            reservoir,
+            state_gas_spent: 0,
+            refunded: 0,
+        }
+    }
+
+    /// Returns the remaining gas.
+    #[inline]
+    pub const fn remaining(&self) -> u64 {
+        self.remaining
+    }
+
+    /// Sets the remaining gas.
+    #[inline]
+    pub fn set_remaining(&mut self, val: u64) {
+        self.remaining = val;
+    }
+
+    /// Returns the reservoir gas.
+    #[inline]
+    pub const fn reservoir(&self) -> u64 {
+        self.reservoir
+    }
+
+    /// Sets the reservoir gas.
+    #[inline]
+    pub fn set_reservoir(&mut self, val: u64) {
+        self.reservoir = val;
+    }
+
+    /// Returns the state gas spent.
+    #[inline]
+    pub const fn state_gas_spent(&self) -> u64 {
+        self.state_gas_spent
+    }
+
+    /// Sets the state gas spent.
+    #[inline]
+    pub fn set_state_gas_spent(&mut self, val: u64) {
+        self.state_gas_spent = val;
+    }
+
+    /// Returns the refunded gas.
+    #[inline]
+    pub const fn refunded(&self) -> i64 {
+        self.refunded
+    }
+
+    /// Sets the refunded gas.
+    #[inline]
+    pub fn set_refunded(&mut self, val: i64) {
+        self.refunded = val;
+    }
+
+    /// Records a regular gas cost.
+    ///
+    /// Deducts from `remaining`. Returns `false` if insufficient gas.
+    #[inline]
+    #[must_use]
+    pub fn record_regular_cost(&mut self, cost: u64) -> bool {
+        if let Some(new_remaining) = self.remaining.checked_sub(cost) {
+            self.remaining = new_remaining;
+            return true;
+        }
+        false
+    }
+
+    /// Records a state gas cost (EIP-8037 reservoir model).
+    ///
+    /// State gas charges deduct from the reservoir first. If the reservoir is exhausted,
+    /// remaining charges spill into `remaining` (requiring `remaining >= cost`).
+    /// Tracks state gas spent.
+    ///
+    /// Returns `false` if total remaining gas is insufficient.
+    #[inline]
+    pub fn record_state_cost(&mut self, cost: u64) -> bool {
+        self.state_gas_spent = self.state_gas_spent.saturating_add(cost);
+
+        if self.reservoir >= cost {
+            self.reservoir -= cost;
+            return true;
+        }
+
+        let mut spill = cost;
+        if self.reservoir != 0 {
+            spill -= self.reservoir;
+            self.reservoir = 0;
+        }
+
+        self.record_regular_cost(spill)
+    }
+
+    /// Records a refund value.
+    #[inline]
+    pub fn record_refund(&mut self, refund: i64) {
+        self.refunded += refund;
+    }
+
+    /// Erases a gas cost from remaining (returns gas from child frame).
+    #[inline]
+    pub fn erase_cost(&mut self, returned: u64) {
+        self.remaining += returned;
+    }
+
+    /// Spends all remaining gas excluding the reservoir.
+    #[inline]
+    pub fn spend_all(&mut self) {
+        self.remaining = 0;
+    }
+}
+
 /// Gas cost for operations that consume zero gas.
 pub const ZERO: u64 = 0;
 /// Base gas cost for basic operations.
@@ -113,6 +247,7 @@ pub const CALL_STIPEND: u64 = 2300;
 pub struct InitialAndFloorGas {
     /// Initial gas for transaction.
     pub initial_total_gas: u64,
+    /// TOOD(state_gas): fix this comment to include EIP-8037 covered cases.
     /// State gas component of initial_gas (subset of initial_total_gas).
     /// For CREATE transactions, this includes `new_account_state_gas` and `create_state_gas`.
     /// For CALL transactions, this is 0 as state gas is unpredictable at validation time.

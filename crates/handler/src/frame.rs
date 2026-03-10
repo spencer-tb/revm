@@ -529,7 +529,17 @@ impl EthFrame<EthInterpreter> {
                 );
 
                 let this_gas = &mut interpreter.gas;
-                if instruction_result.is_ok_or_revert() {
+                // Refund unused gas for: success, revert, and create failures (size limit, etc).
+                // These are cases where execution completed but the result was rejected/limited,
+                // not fatal errors like OOG where gas is consumed.
+                if instruction_result.is_ok_or_revert()
+                    || matches!(
+                        instruction_result,
+                        InstructionResult::CreateContractSizeLimit
+                            | InstructionResult::CreateContractStartingWithEF
+                            | InstructionResult::CreateInitCodeSizeLimit
+                    )
+                {
                     this_gas.erase_cost(outcome.gas().remaining());
                 }
 
@@ -558,24 +568,30 @@ pub fn handle_reservoir_remaining_gas(
     parent_gas: &mut Gas,
     child_gas: &Gas,
     ins_result: InstructionResult,
-) {
-    // handle reservoir remaining gas only in case of success.
-    // In case of revert or halt, reservoir gas is not deducted and can be even increased.
-    if ins_result.is_ok() {
+) { 
+    if ins_result.is_ok() { 
+        // On success: parent takes the child's final reservoir.
         parent_gas.set_reservoir(child_gas.reservoir());
         // Accumulate child's state gas into parent's total.
         // Parent may have already charged state gas (e.g., new_account + create) before
         // creating the child frame. Child starts with state_gas_spent=0, so we must add
         // rather than overwrite to preserve the parent's prior charges.
         parent_gas.set_state_gas_spent(parent_gas.state_gas_spent() + child_gas.state_gas_spent());
-    } else {
-        // state gas spent should stay the same in case of revert or halt.
-        // the difference that happened between state gases should be checked
-        // if it is done against regular gas, and return this gas to reservoir.
+    } else if ins_result.is_revert() {
+ 
+        // On revert: state changes are undone, regular gas IS returned (via erase_cost).
+        // State gas that spilled from reservoir into regular gas was returned with the
+        // regular gas, so refill that portion back into the reservoir.
         parent_gas.set_reservoir(handler_reservoir_refill(
             parent_gas.reservoir(),
             child_gas.state_gas_spent(),
         ));
+    } else { 
+        // On halt (OOG, invalid opcode, etc.): regular gas is NOT returned (no erase_cost).
+        // Only the child's unspent reservoir should go back to the parent.
+        // spend_all() only zeroes remaining, not reservoir, so child.reservoir()
+        // correctly reflects unspent reservoir gas.
+        parent_gas.set_reservoir(child_gas.reservoir());
     }
 }
 
@@ -586,12 +602,10 @@ pub fn handle_reservoir_remaining_gas(
 #[inline]
 pub fn handler_reservoir_refill(reservoir: u64, spent_state_gas: u64) -> u64 {
     // if we spent more state gas than we have in reservoir, we need to refill it.
-    let _state_gas_in_regular = spent_state_gas.saturating_sub(reservoir);
+    let state_gas_in_regular = spent_state_gas.saturating_sub(reservoir);
 
     // we are increasing reservoir by the amount of state gas that was in regular gas.
-    // TODO(rakita) test fixtures are assuming zero here, when this is fixed uncomment the line below.
-    //reservoir + state_gas_in_regular
-    reservoir
+    reservoir + state_gas_in_regular
 }
 
 /// Handles the result of a CREATE operation, including validation and state updates.
@@ -611,6 +625,20 @@ pub fn return_create<JOURNAL: JournalTr, CFG: Cfg>(
         journal.checkpoint_revert(checkpoint);
         return;
     }
+
+    // State gas for code deposit (EIP-8037).
+    // Charged after size check: only code that passes validation incurs state gas cost.
+    if cfg.is_amsterdam_eip8037_enabled() {
+        let state_gas_for_code = cfg
+            .gas_params()
+            .code_deposit_state_gas(interpreter_result.output.len());
+        if state_gas_for_code > 0 && !interpreter_result.gas.record_state_cost(state_gas_for_code) {
+            journal.checkpoint_revert(checkpoint);
+            interpreter_result.result = InstructionResult::OutOfGas;
+            return;
+        }
+    }
+
     // Host error if present on execution
     // If ok, check contract creation limit and calculate gas deduction on output len.
     //
@@ -624,22 +652,10 @@ pub fn return_create<JOURNAL: JournalTr, CFG: Cfg>(
         return;
     }
 
-    // State gas for code deposit (EIP-8037).
-    // Charged before size check: state gas represents the cost of touching state
-    // and must be consumed even if the code exceeds the size limit.
-    if cfg.is_amsterdam_eip8037_enabled() {
-        let state_gas_for_code = cfg
-            .gas_params()
-            .code_deposit_state_gas(interpreter_result.output.len());
-        if state_gas_for_code > 0 && !interpreter_result.gas.record_state_cost(state_gas_for_code) {
-            journal.checkpoint_revert(checkpoint);
-            interpreter_result.result = InstructionResult::OutOfGas;
-            return;
-        }
-    }
-
     // EIP-170: Contract code size limit to 0x6000 (~25kb)
     // EIP-7954 increased this limit to 0x8000 (~32kb).
+    // This must be checked BEFORE charging state gas for code deposit,
+    // so that oversized code does not incur storage gas costs.
     if spec_id.is_enabled_in(SPURIOUS_DRAGON) && interpreter_result.output.len() > max_code_size {
         journal.checkpoint_revert(checkpoint);
         interpreter_result.result = InstructionResult::CreateContractSizeLimit;

@@ -56,6 +56,8 @@ impl PrecompileOutput {
         }
     }
 
+    
+
     /// Flips [`Self::reverted`] to `true`.
     pub fn reverted(mut self) -> Self {
         self.reverted = true;

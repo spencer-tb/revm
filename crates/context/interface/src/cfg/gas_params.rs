@@ -730,6 +730,31 @@ impl GasParams {
         self.get(GasId::tx_eip7702_per_auth_state_gas())
     }
 
+    /// EIP-8037: Splits a total EIP-7702 refund into state gas and regular gas portions.
+    ///
+    /// At validation time, `initial_tx_gas` splits each auth cost into state + regular.
+    /// This method is the inverse: it recovers how much of the total refund was state gas.
+    ///
+    /// The state gas portion reduces `initial_state_gas` directly (not subject to refund caps).
+    /// The regular gas portion goes through the standard 1/5 refund cap.
+    ///
+    /// # Returns
+    ///
+    /// `(state_refund, regular_refund)` for the given total refund.
+    #[inline]
+    pub fn split_eip7702_refund(&self, total_refund: u64) -> (u64, u64) {
+        let per_auth_refund = self.tx_eip7702_auth_refund();
+        let per_auth_state_gas = self.tx_eip7702_per_auth_state_gas();
+        if per_auth_state_gas > 0 && per_auth_refund > 0 && total_refund > 0 {
+            let state_refund_per_auth = core::cmp::min(per_auth_refund, per_auth_state_gas);
+            let num_refunded = total_refund / per_auth_refund;
+            let state_refund = num_refunded * state_refund_per_auth;
+            (state_refund, total_refund - state_refund)
+        } else {
+            (0, total_refund)
+        }
+    }
+
     /// Used in [GasParams::initial_tx_gas] to calculate the token non zero byte multiplier.
     #[inline]
     pub fn tx_token_non_zero_byte_multiplier(&self) -> u64 {
@@ -1390,14 +1415,15 @@ mod tests {
 
     #[test]
     fn test_initial_state_gas_for_create() {
-        let gas_params = GasParams::new_spec(SpecId::default());
+        // Use AMSTERDAM spec since EIP-8037 state gas is only enabled starting from Amsterdam
+        let gas_params = GasParams::new_spec(SpecId::AMSTERDAM);
 
         // Test CREATE transaction (is_create = true)
         let create_gas = gas_params.initial_tx_gas(b"", true, 0, 0, 0);
         let expected_state_gas = gas_params.create_state_gas();
 
         assert_eq!(create_gas.initial_state_gas, expected_state_gas);
-        assert_eq!(create_gas.initial_state_gas, 32000);
+        assert_eq!(create_gas.initial_state_gas, 131488);
 
         // initial_total_gas includes both regular and state gas
         let create_cost = gas_params.tx_create_cost();

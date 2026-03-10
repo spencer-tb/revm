@@ -18,7 +18,7 @@ pub struct GasTracker {
     reservoir: u64,
     /// Total state gas spent so far.
     state_gas_spent: u64,
-    /// Refunded gas. This is used only at the end of execution.
+    /// Refunded gas. Used to refund the gas to the caller at the end of execution.
     refunded: i64,
 }
 

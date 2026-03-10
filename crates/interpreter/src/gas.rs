@@ -406,24 +406,23 @@ mod tests {
         );
     }
 
-    /// A.1: Verify state_gas_spent is incremented even after failed record_state_cost.
-    /// This documents the current behavior: state_gas_spent is bumped before validation,
-    /// so a failed spill leaves an inflated counter.
+    /// A.1: Verify record_state_cost is atomic — no mutations on OOG failure.
     #[test]
-    fn test_record_state_cost_oog_inflates_state_gas_spent() {
-        // remaining=30, reservoir=0, cost=100 → OOG
+    fn test_record_state_cost_oog_is_atomic() {
+        // remaining=30, reservoir=0, cost=100 → OOG, no mutations
         let mut gas = Gas::new(30);
         assert!(!gas.record_state_cost(100));
-        // state_gas_spent is incremented before the OOG check
-        assert_eq!(gas.state_gas_spent(), 100);
+        assert_eq!(gas.state_gas_spent(), 0);
+        assert_eq!(gas.remaining(), 30);
+        assert_eq!(gas.reservoir(), 0);
 
         // With reservoir partially covering: reservoir=20, remaining=30, cost=100
-        // spill = 100 - 20 = 80, remaining(30) < 80 → OOG
+        // spill = 80 > remaining(30) → OOG, no mutations
         let mut gas = Gas::new_with_regular_gas_and_reservoir(30, 20);
         assert!(!gas.record_state_cost(100));
-        assert_eq!(gas.state_gas_spent(), 100);
-        // reservoir is consumed even on failure
-        assert_eq!(gas.reservoir(), 0);
+        assert_eq!(gas.state_gas_spent(), 0);
+        assert_eq!(gas.reservoir(), 20);
+        assert_eq!(gas.remaining(), 30);
     }
 
     /// A.3: State gas with zero regular remaining but non-zero reservoir.

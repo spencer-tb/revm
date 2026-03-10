@@ -108,23 +108,28 @@ impl GasTracker {
     /// remaining charges spill into `remaining` (requiring `remaining >= cost`).
     /// Tracks state gas spent.
     ///
+    /// All mutations are atomic: on OOG failure, no fields are modified.
+    ///
     /// Returns `false` if total remaining gas is insufficient.
     #[inline]
     pub fn record_state_cost(&mut self, cost: u64) -> bool {
-        self.state_gas_spent = self.state_gas_spent.saturating_add(cost);
-
         if self.reservoir >= cost {
             self.reservoir -= cost;
+            self.state_gas_spent = self.state_gas_spent.saturating_add(cost);
             return true;
         }
 
-        let mut spill = cost;
-        if self.reservoir != 0 {
-            spill -= self.reservoir;
-            self.reservoir = 0;
+        // Reservoir insufficient — check if spill into remaining covers it
+        let spill = cost - self.reservoir;
+        if self.remaining < spill {
+            return false;
         }
 
-        self.record_regular_cost(spill)
+        // Both reservoir and remaining have enough — commit all mutations
+        self.remaining -= spill;
+        self.state_gas_spent = self.state_gas_spent.saturating_add(cost);
+        self.reservoir = 0;
+        true
     }
 
     /// Records a refund value.

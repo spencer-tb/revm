@@ -446,12 +446,13 @@ pub trait Handler {
         // Always track state gas spent regardless of outcome.
         gas.set_state_gas_spent(state_gas_spent);
 
-        // Reservoir handling
-        if instruction_result.is_ok() {
-            gas.set_reservoir(reservoir);
-        } else {
-            gas.set_reservoir(initial_reservoir + state_gas_spent);
-        }
+        // Reservoir handling at the top-level frame.
+        // Per EIP-8037: "The state_gas_reservoir is not consumed, it is
+        // preserved at the top level for refund."
+        // Use the captured reservoir value directly — it already reflects
+        // child frame restorations (incorporate_child_on_error) and any
+        // state gas consumed/spilled during execution.
+        gas.set_reservoir(reservoir);
 
         Ok(())
     }

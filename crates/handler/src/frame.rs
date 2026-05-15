@@ -600,6 +600,12 @@ pub const fn handle_reservoir_remaining_gas(
                 .refill_amount()
                 .saturating_add(child_gas.refill_amount()),
         );
+        // EIP-8037: hand the child's deferred 0→x→0 refund to the parent,
+        // re-clamped to the parent's own (now accumulated) state gas. Any
+        // still-unapplied remainder keeps deferring further up. Mirrors
+        // EELS amsterdam `incorporate_child_on_success`. (On revert/halt
+        // the child's pending is discarded with the frame — see below.)
+        parent_gas.credit_state_gas_refund(child_gas.state_gas_refund_pending());
     } else {
         // On revert/halt: the child's state changes are rolled back, so any
         // 0→x→0 refills the child (or its descendants) credited to the

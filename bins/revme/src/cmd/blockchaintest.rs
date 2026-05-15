@@ -992,7 +992,10 @@ fn execute_blockchain_test(
         evm.db_mut().bump_bal_index();
 
         // uncle rewards are not implemented yet
-        post_block::post_block_transition(
+        // blockchaintest consumes neither the EIP-7685 request payload
+        // nor the block-level exception from post_block_transition;
+        // both are surfaced for t8n's use.
+        let _ = post_block::post_block_transition(
             &mut evm,
             &block_env,
             block.withdrawals.as_deref().unwrap_or_default(),

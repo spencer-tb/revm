@@ -3926,6 +3926,9 @@ dependencies = [
 name = "revme"
 version = "15.0.0"
 dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-primitives",
  "alloy-rlp",
  "alloy-sol-types",
  "alloy-trie",
@@ -3937,6 +3940,7 @@ dependencies = [
  "revm",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "walkdir",
 ]

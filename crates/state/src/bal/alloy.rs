@@ -2,6 +2,7 @@
 
 // Re-export Alloy BAL types.
 pub use alloy_eip7928::{
+    total_bal_items as total_alloy_bal_items,
     BalanceChange as AlloyBalanceChange, BlockAccessList as AlloyBal,
     CodeChange as AlloyCodeChange, NonceChange as AlloyNonceChange,
     StorageChange as AlloyStorageChange,

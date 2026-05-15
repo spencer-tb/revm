@@ -3,11 +3,12 @@ pub mod blockchaintest;
 pub mod bytecode;
 pub mod evmrunner;
 pub mod statetest;
+pub mod t8n;
 
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(infer_subcommands = true)]
+#[command(infer_subcommands = true, version, name = "revme")]
 pub enum MainCmd {
     /// Execute Ethereum state tests.
     Statetest(statetest::Cmd),
@@ -23,6 +24,8 @@ pub enum MainCmd {
     Blockchaintest(blockchaintest::Cmd),
     /// Execute Ethereum blockchain tests.
     Btest(blockchaintest::Cmd),
+    /// State transition tool (geth-compatible `t8n` interface).
+    T8n(t8n::Cmd),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +52,7 @@ impl MainCmd {
                 cmd.run();
             }
             Self::Blockchaintest(cmd) | Self::Btest(cmd) => cmd.run()?,
+            Self::T8n(cmd) => cmd.run()?,
         }
         Ok(())
     }

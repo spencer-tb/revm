@@ -25,6 +25,9 @@ revm = { workspace = true, features = [
 criterion.workspace = true
 
 # alloy
+alloy-consensus = { workspace = true, default-features = false, features = ["serde"] }
+alloy-eips = { workspace = true, default-features = false, features = ["std"] }
+alloy-primitives = { workspace = true, default-features = false, features = ["std"] }
 alloy-rlp = { workspace = true, features = ["arrayvec", "derive"] }
 alloy-sol-types.workspace = true
 alloy-trie = { workspace = true, features = ["ethereum"] }
@@ -33,6 +36,7 @@ alloy-trie = { workspace = true, features = ["ethereum"] }
 indicatif.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
+sha2 = { workspace = true, features = ["std"] }
 clap.workspace = true
 thiserror.workspace = true
 walkdir.workspace = true

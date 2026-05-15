@@ -28,6 +28,17 @@ pub struct GasTracker {
     /// the child's reservoir, without confusing it with legitimate reservoir
     /// growth from grandchild halt/revert refunds.
     refill_amount: u64,
+    /// Deferred state gas refund (EIP-8037).
+    ///
+    /// The unapplied remainder of a 0→x→0 restoration refund that
+    /// exceeded this frame's own `state_gas_spent`. The matching 0→x
+    /// charge lives in an ancestor (e.g. a slot set by the parent then
+    /// cleared via DELEGATECALL), so the excess cannot be credited to
+    /// this frame's reservoir. It is carried here and handed to the
+    /// parent on successful return, which re-clamps it against its own
+    /// state gas. Discarded on revert/halt. Mirrors EELS amsterdam
+    /// `Evm.state_gas_refund_pending` / `credit_state_gas_refund`.
+    state_gas_refund_pending: u64,
     /// Refunded gas. Used to refund the gas to the caller at the end of execution.
     refunded: i64,
 }
@@ -42,6 +53,7 @@ impl GasTracker {
             reservoir,
             state_gas_spent: 0,
             refill_amount: 0,
+            state_gas_refund_pending: 0,
             refunded: 0,
         }
     }
@@ -151,22 +163,56 @@ impl GasTracker {
         success
     }
 
-    /// Refills the reservoir with state gas that is returned by 0→x→0 storage
-    /// restoration (EIP-8037 issue #2).
+    /// Restores state gas this frame charged upfront, unclamped.
     ///
-    /// Per the spec, when a storage slot is restored to its original zero value
-    /// within the same transaction, the state gas charged for the initial 0→x
-    /// transition is directly restored to the reservoir rather than routed
-    /// through the capped refund counter.
-    ///
-    /// `state_gas_spent` is decremented by the same amount and may become
-    /// negative if the matching 0→x charge was made by a parent frame. The
-    /// parent's total is reconciled on frame return.
+    /// Used only for undoing a charge the frame made itself: the
+    /// failed-CREATE `create_state_gas` pre-charge (revert/halt/early
+    /// fail). The matching charge is always in this same frame's
+    /// `state_gas_spent`, so no clamp is needed. For the 0→x→0 SSTORE
+    /// restoration refund — whose matching 0→x charge may live in an
+    /// ancestor — use [`GasTracker::credit_state_gas_refund`] instead.
     #[inline]
     pub const fn refill_reservoir(&mut self, amount: u64) {
         self.reservoir = self.reservoir.saturating_add(amount);
         self.state_gas_spent = self.state_gas_spent.saturating_sub(amount as i64);
         self.refill_amount = self.refill_amount.saturating_add(amount);
+    }
+
+    /// Credits a 0→x→0 storage-restoration state-gas refund (EIP-8037).
+    ///
+    /// Clamps the applied portion to this frame's own `state_gas_spent`
+    /// — the matching 0→x charge may sit in an ancestor sharing storage
+    /// via CALLCODE/DELEGATECALL, or be a slot the parent set then the
+    /// child cleared. The unapplied remainder is deferred in
+    /// `state_gas_refund_pending`, propagated to the parent on
+    /// successful return (where it is re-clamped) and discarded on
+    /// revert/halt. Mirrors EELS amsterdam `credit_state_gas_refund`.
+    #[inline]
+    pub const fn credit_state_gas_refund(&mut self, amount: u64) {
+        let used = if self.state_gas_spent > 0 {
+            self.state_gas_spent as u64
+        } else {
+            0
+        };
+        let applied = if amount < used { amount } else { used };
+        self.reservoir = self.reservoir.saturating_add(applied);
+        self.state_gas_spent -= applied as i64;
+        self.refill_amount = self.refill_amount.saturating_add(applied);
+        self.state_gas_refund_pending = self
+            .state_gas_refund_pending
+            .saturating_add(amount - applied);
+    }
+
+    /// Returns the deferred (unapplied) 0→x→0 refund for this frame.
+    #[inline]
+    pub const fn state_gas_refund_pending(&self) -> u64 {
+        self.state_gas_refund_pending
+    }
+
+    /// Sets the deferred 0→x→0 refund (used when propagating frames).
+    #[inline]
+    pub const fn set_state_gas_refund_pending(&mut self, val: u64) {
+        self.state_gas_refund_pending = val;
     }
 
     /// Returns cumulative reservoir refill amount from 0→x→0 restorations

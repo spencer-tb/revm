@@ -243,16 +243,19 @@ pub fn sstore<IT: ITy, H: Host + ?Sized>(context: Ictx<'_, H, IT>) -> Result {
                 .sstore_state_gas(&state_load.data, cpsb)
         );
 
-        // EIP-8037 issue #2: 0→x→0 storage restoration refills the reservoir
-        // directly rather than routing the state gas through the capped refund
-        // counter. The regular-gas portion of the restoration still flows
-        // through `sstore_refund` below.
+        // EIP-8037: 0→x→0 storage restoration credits the state gas back
+        // to the reservoir, clamped to this frame's own state_gas_spent.
+        // If the slot's 0→x charge was made by an ancestor (e.g. parent
+        // SSTORE then child clear via DELEGATECALL), the unapplied
+        // remainder is deferred via state_gas_refund_pending and handed
+        // to the parent on success. The regular-gas portion of the
+        // restoration still flows through `sstore_refund` below.
         let refill = context
             .host
             .gas_params()
             .sstore_state_gas_refill(&state_load.data, cpsb);
         if refill > 0 {
-            context.interpreter.gas.refill_reservoir(refill);
+            context.interpreter.gas.credit_state_gas_refund(refill);
         }
     }
 

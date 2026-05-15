@@ -168,12 +168,32 @@ impl Gas {
         self.tracker.set_state_gas_spent(val);
     }
 
-    /// Refills the reservoir with state gas returned by 0→x→0 storage restoration.
+    /// Restores state gas this frame charged upfront, unclamped.
     ///
     /// See [`GasTracker::refill_reservoir`].
     #[inline]
     pub const fn refill_reservoir(&mut self, amount: u64) {
         self.tracker.refill_reservoir(amount);
+    }
+
+    /// Credits a 0→x→0 storage-restoration refund, clamped and deferred.
+    ///
+    /// See [`GasTracker::credit_state_gas_refund`].
+    #[inline]
+    pub const fn credit_state_gas_refund(&mut self, amount: u64) {
+        self.tracker.credit_state_gas_refund(amount);
+    }
+
+    /// Returns the deferred (unapplied) 0→x→0 refund for this frame.
+    #[inline]
+    pub const fn state_gas_refund_pending(&self) -> u64 {
+        self.tracker.state_gas_refund_pending()
+    }
+
+    /// Sets the deferred 0→x→0 refund (used when propagating frames).
+    #[inline]
+    pub const fn set_state_gas_refund_pending(&mut self, val: u64) {
+        self.tracker.set_state_gas_refund_pending(val);
     }
 
     /// Returns the cumulative reservoir refill amount in this frame.
@@ -451,6 +471,54 @@ mod tests {
         assert_eq!(
             (gas.reservoir(), gas.remaining(), gas.state_gas_spent()),
             (400, 1000, -300)
+        );
+    }
+
+    /// EIP-8037: `credit_state_gas_refund` clamps the applied portion to
+    /// this frame's own `state_gas_spent` and defers the remainder.
+    #[test]
+    fn test_credit_state_gas_refund_clamps_and_defers() {
+        // Frame charged 200 of state gas, then a 0→x→0 refund of 200:
+        // fully applied, nothing deferred (matching charge is local).
+        let mut gas = Gas::new_with_regular_gas_and_reservoir(1000, 500);
+        assert!(gas.record_state_cost(200));
+        gas.credit_state_gas_refund(200);
+        assert_eq!(
+            (
+                gas.reservoir(),
+                gas.state_gas_spent(),
+                gas.state_gas_refund_pending()
+            ),
+            (500, 0, 0)
+        );
+
+        // Clear-only sub-frame: state_gas_spent == 0, so a 195_840 refund
+        // (two ancestor-set slots cleared) is fully deferred, NOT credited
+        // to the local reservoir. This is the bug fix: without the clamp
+        // the reservoir would balloon to 195_840 of phantom state gas.
+        let mut gas = Gas::new_with_regular_gas_and_reservoir(1000, 0);
+        gas.credit_state_gas_refund(97_920);
+        gas.credit_state_gas_refund(97_920);
+        assert_eq!(
+            (
+                gas.reservoir(),
+                gas.state_gas_spent(),
+                gas.state_gas_refund_pending()
+            ),
+            (0, 0, 195_840)
+        );
+
+        // Partial clamp: frame charged 50, refund 200 → apply 50, defer 150.
+        let mut gas = Gas::new_with_regular_gas_and_reservoir(1000, 500);
+        assert!(gas.record_state_cost(50));
+        gas.credit_state_gas_refund(200);
+        assert_eq!(
+            (
+                gas.reservoir(),
+                gas.state_gas_spent(),
+                gas.state_gas_refund_pending()
+            ),
+            (500, 0, 150)
         );
     }
 
